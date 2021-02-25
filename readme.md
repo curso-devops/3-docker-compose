@@ -3,6 +3,7 @@
 1. [Crear una orquestación compleja con imágenes independientes](#new-orquestations)
 2. [Ejecutar, administrar y probar la orquestación](#test-orquestations)
 3. [Escalar servicios con docker-compose (múltiples instancias)](#scale)
+4. [Redes virtuales en docker y múltiples entornos](#vpn)
 
 <hr>
 
@@ -207,3 +208,155 @@ docker-compose -f stack-billing.yml up -d --force-recreate
 **DEPRECADO** Sólo se va a instanciar una imagen y mostrará un warning indicándolo...
 
 El comando ```docker stats``` muesta las estadísticas de cada uno de los contenedores.
+
+<hr>
+
+<a name="vpn"></a>
+
+## 5. Redes virtuales en docker y múltiples entornos
+
+Podemos tener diferentes redes virtules para separar las aplicaciones o los entornos.
+
+![Image 1](./images/img1.png)
+
+> Debido a que el uso de deploy en el docker-compose está deprecado, sólo crearemos nodo para el front en cada entorno.
+
+La configuración que vamos a tener es de dos entornos (PRE Y PRO, ya que obviaremos dev por ser igaul a lo que hemos realizado hasta ahora) con dos nodos en cada uno de ellos para tener tolerancia a fallo.
+
+En el yml de configuración podemos ver las siguientes modificaciones con respecto a lo que hemos hecho previamente:
+
+Cuando no se establece el atributo networks, todos los servicios definidos se despliegan sobre la misma red virtual. Para este ejemplo vamos a configurar el atributo network para separar los entornos en dos redes virtuales distintas:
+
+~~~yml
+networks:
+  env_prod:
+    driver: bridge  
+    #activate ipv6
+    driver_opts: 
+            com.docker.network.enable_ipv6: "true"
+    #IP Adress Manager
+    ipam: 
+        driver: default
+        config:
+        - subnet: 172.16.232.0/24
+        - subnet: "2001:3974:3979::/64"
+  env_prep:   
+    driver: bridge  
+    #activate ipv6
+    driver_opts: 
+            com.docker.network.enable_ipv6: "true"
+    #IP Adress Manager
+    ipam:
+        driver: default
+        config:
+        - subnet: 172.16.235.0/24
+        - subnet: "2001:3984:3989::/64"
+~~~
+
+A nivel de servicios, debemos clonarlos para tener servicios diferenciados en cada uno de los entornos:
+
+~~~yml
+services:
+#database engine service
+  postgres_db_prod:
+    container_name: postgres_prod
+    image: postgres:latest
+    restart: always
+    networks:
+      - env_prod      
+    environment:
+    ports:
+      - 5432:5432
+    volumes:
+        #allow *.sql, *.sql.gz, or *.sh and is execute only if data directory is empty
+      - ./dbfiles:/docker-entrypoint-initdb.d
+      - /var/lib/postgres_data_prod:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: qwerty
+      POSTGRES_DB: postgres  
+#database engine service
+  postgres_db_prep:
+    container_name: postgres_prep
+    image: postgres:latest
+    restart: always
+    networks:     
+      - env_prep
+    environment:
+    ports:
+      - 4432:5432
+    volumes:
+        #allow *.sql, *.sql.gz, or *.sh and is execute only if data directory is empty
+      - ./dbfiles:/docker-entrypoint-initdb.d
+      - /var/lib/postgres_data_prep:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: qwerty
+      POSTGRES_DB: postgres    
+...
+~~~
+
+Debemos tener en cuenta que hemos de cambiar:
+- Nombre del servicio
+- Nombre del contenedor
+- Puertos (cambiar el puerto externo para diferentes entornos, el interno debe ser el mismo)
+- Volumen
+- Definir a qué red pertenece el servicio
+
+Para el adminer no es necesario replicar el servicio, ya que al ser un gestor de BBDD puedo conectarme al postgres de cada entorno desde la misma instancia. Únicamente hemos de definir que este servicio será común a las dos redes virtuales.
+
+~~~yml
+#database admin service
+#Use for All enviroments
+  adminer:
+    container_name: adminer
+    image: adminer
+    restart: always
+    networks:
+      - env_prod
+      - env_prep
+    depends_on: 
+      - postgres_db_prod
+      - postgres_db_prep   
+    ports:
+       - 9090:8080
+~~~
+
+Para el microservicio en java, además de lo anterior, debemos indicar el jar correspondiente en cada entorno:
+
+~~~yml
+#Billin app backend service
+  billingapp-back-prod:
+    build:
+      context: ./java
+      args:
+        - JAR_FILE=billing-0.0.3-SNAPSHOT.jar
+    networks:
+      - env_prod     
+    container_name: billingApp-back-prod     
+    environment:
+       - JAVA_OPTS=
+         -Xms256M 
+         -Xmx256M         
+    depends_on:     
+      - postgres_db_prod
+    ports:
+      - 8080:8080 
+#Billin app backend service
+  billingapp-back-prep:
+    build:
+      context: ./java
+      args:
+        - JAR_FILE=billing-0.0.2-SNAPSHOT.jar
+    networks:    
+      - env_prep
+    container_name: billingApp-back-prep      
+    environment:
+       - JAVA_OPTS=
+         -Xms256M 
+         -Xmx256M         
+    depends_on:     
+      - postgres_db_prep
+    ports:
+      - 7080:7080     
+~~~
