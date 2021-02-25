@@ -15,7 +15,7 @@ Descargamos el repositorio con los servicios diferenciados. En este caso tendrem
 
 - Para la aplicación ángular:
 
-~~~docker
+~~~dockerfile
 FROM nginx:alpine
  # use a volume is more efficient and speed that filesystem
 VOLUME /tmp
@@ -30,7 +30,7 @@ CMD ["nginx", "-g", "daemon off;"]
 
 - Para el microservicio java:
 
-~~~docker
+~~~dockerfile
 FROM openjdk:8-jdk-alpine
 RUN addgroup -S devopsc && adduser -S javams -G devopsc
 USER javams:devopsc
